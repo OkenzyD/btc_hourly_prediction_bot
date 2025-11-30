@@ -1,11 +1,12 @@
 pandas
 numpy
 requests
-textblob
+feedparser
 vaderSentiment
+textblob
 ta
-tensorflow
-xgboost
+tensorflow-cpu
 scikit-learn
+xgboost
 joblib
-python-dateutil
+atproto
