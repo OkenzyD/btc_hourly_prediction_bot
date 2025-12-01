@@ -15,6 +15,8 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from tensorflow.keras.models import load_model
 import ta
 from atproto import Client
+import xgboost as xgb
+
 
 # -----------------------------
 # CONFIG
@@ -28,7 +30,7 @@ MODEL_DIR = os.environ.get("MODEL_DIR", ".")
 FEATURE_SCALER_PATH = f"{MODEL_DIR}/{BASE_NAME}_FeatureScaler.pkl"
 TARGET_SCALER_PATH  = f"{MODEL_DIR}/{BASE_NAME}_TargetScaler.pkl"
 GRU_MODEL_PATH      = f"{MODEL_DIR}/{BASE_NAME}_GRU_target_close_L10.keras"
-XGB_MODEL_PATH      = f"{MODEL_DIR}/{BASE_NAME}_HYBRID_L10_xgb.pkl"
+XGB_MODEL_PATH      = f"{MODEL_DIR}/{BASE_NAME}_HYBRID_L10_xgb.json"
 
 # Bluesky credentials stored as Render environment variables
 BSKY_HANDLE       = os.environ.get("BSKY_HANDLE")
@@ -171,8 +173,18 @@ def run_prediction_pipeline():
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred = target_scaler.inverse_transform(gru_pred_scaled)[0][0]
 
-    xgb_model = joblib.load(XGB_MODEL_PATH)
-    hybrid_input = np.hstack([X_live_scaled[-1], gru_pred]).reshape(1, -1)
+    xgb_model = xgb.XGBRegressor(
+        n_estimators=300,
+        learning_rate=0.03,
+        max_depth=6,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        objective="reg:squarederror",
+        random_state=42
+    )
+    
+    xgb_model.load_model(XGB_MODEL_PATH)
+    hybrid_input = np.hstack([X_live_scaled[-1], [gru_pred]]).reshape(1, -1)
     hybrid_pred = xgb_model.predict(hybrid_input)[0]
 
     current_price = merged["close"].iloc[-1]
