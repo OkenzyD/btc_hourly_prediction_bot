@@ -159,11 +159,11 @@ def run_prediction_pipeline():
     merged = merge_sentiment_with_decay(btc_df, sent_df)
     merged = enrich_live_dataset(merged)
 
-    train_df = pd.read_csv(f"{MODEL_DIR}/{BASE_NAME}_Train_Scaled.csv")
-    feature_cols = [c for c in train_df.columns
-                    if c not in ["timestamp", "target_close", "target_return"]]
+    import json
 
-    live_features = merged[feature_cols].iloc[-LOOKBACK:]
+    with open(f"{MODEL_DIR}/{BASE_NAME}_feature_list.json") as f:
+        feature_cols = json.load(f)
+        live_features = merged[feature_cols].iloc[-LOOKBACK:]
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
     X_live_scaled = feature_scaler.transform(live_features)
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, len(feature_cols))
@@ -216,12 +216,28 @@ def post_to_bluesky(current_price, gru_pred, hybrid_pred, move_pct):
     )
 
     client.send_post(text=msg)
-    print("✓ Posted to Bluesky.")
+    print(" Posted to Bluesky.")
 
 
 # ============================================================
 # 6. MAIN
 # ============================================================
+import time
+
 if __name__ == "__main__":
+
+    # Allow Render health check to settle
+    time.sleep(3)
+
+    # Prevent duplicate posts on restart
+    POST_ONCE_FLAG = "/tmp/bot_ran.flag"
+
+    if os.path.exists(POST_ONCE_FLAG):
+        print("Bot already ran recently — skipping.")
+        exit()
+
+    open(POST_ONCE_FLAG, "w").close()
+
+    # Run bot
     current_price, gru_pred, hybrid_pred, move_pct = run_prediction_pipeline()
     post_to_bluesky(current_price, gru_pred, hybrid_pred, move_pct)
