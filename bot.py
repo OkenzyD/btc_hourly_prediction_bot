@@ -163,7 +163,7 @@ def run_prediction_pipeline():
 
     with open(f"{MODEL_DIR}/{BASE_NAME}_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
-        live_features = merged[feature_cols].iloc[-LOOKBACK:]
+        live_features = merged[feature_cols[:-1]].iloc[-LOOKBACK:]
     
     # Scale features
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
