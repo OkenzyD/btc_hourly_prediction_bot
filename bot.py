@@ -261,4 +261,4 @@ if __name__ == "__main__":
     print("Prediction OK, posting to Bluesky...")
     post_to_bluesky(current_price, gru_pred, hybrid_pred, move_pct)
 
-    print("===== Cron bot finish =====")
+    print("===== Cron bot finished =====")
