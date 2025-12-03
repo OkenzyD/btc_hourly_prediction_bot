@@ -172,9 +172,9 @@ def run_prediction_pipeline():
 
     # GRU prediction
     gru_model = load_model(GRU_MODEL_PATH)
-    gru_pred_scaled = gru_model.predict(X_live_gru)
+    gru_pred_scaled = gru_model.predict(X_live_gru)[0][0]
     target_scaler = joblib.load(TARGET_SCALER_PATH)
-    gru_pred = target_scaler.inverse_transform(gru_pred_scaled)[0][0]
+    gru_pred = target_scaler.inverse_transform([[gru_pred_scaled]])[0][0]
 
     # Hybrid XGBoost
     xgb_model = xgb.XGBRegressor(
