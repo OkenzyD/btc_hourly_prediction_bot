@@ -16,7 +16,7 @@ from tensorflow.keras.models import load_model
 import ta
 from atproto import Client
 import xgboost as xgb
-
+import time
 
 # -----------------------------
 # CONFIG
@@ -222,22 +222,14 @@ def post_to_bluesky(current_price, gru_pred, hybrid_pred, move_pct):
 # ============================================================
 # 6. MAIN
 # ============================================================
-import time
+
 
 if __name__ == "__main__":
 
-    # Allow Render health check to settle
-    time.sleep(3)
+    
+    time.sleep(2)
 
-    # Prevent duplicate posts on restart
-    POST_ONCE_FLAG = "/tmp/bot_ran.flag"
-
-    if os.path.exists(POST_ONCE_FLAG):
-        print("Bot already ran recently — skipping.")
-        exit()
-
-    open(POST_ONCE_FLAG, "w").close()
-
+    
     # Run bot
     current_price, gru_pred, hybrid_pred, move_pct = run_prediction_pipeline()
     post_to_bluesky(current_price, gru_pred, hybrid_pred, move_pct)
