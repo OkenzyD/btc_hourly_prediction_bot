@@ -168,7 +168,7 @@ def run_prediction_pipeline():
     # Scale features
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
     X_live_scaled = feature_scaler.transform(live_features)
-    X_live_gru = X_live_scaled.reshape(1, LOOKBACK, len(feature_cols))
+    X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
     # GRU prediction
     gru_model = load_model(GRU_MODEL_PATH)
@@ -189,7 +189,7 @@ def run_prediction_pipeline():
     xgb_model.load_model(XGB_MODEL_PATH)
 
     # Build hybrid input vector
-    hybrid_input = np.hstack([X_live_scaled[-1], [gru_pred_scaled]]).reshape(1, -1)
+    hybrid_input = np.hstack([X_live_scaled[-1], [gru_pred]]).reshape(1, -1)
 
     # ==================== DEBUG PRINTS ====================
     print("\n===== DEBUG INFO (FOR HYBRID ISSUE) =====")
