@@ -164,15 +164,19 @@ def run_prediction_pipeline():
     with open(f"{MODEL_DIR}/{BASE_NAME}_feature_list.json") as f:
         feature_cols = json.load(f)
         live_features = merged[feature_cols].iloc[-LOOKBACK:]
+    
+    # Scale features
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
     X_live_scaled = feature_scaler.transform(live_features)
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, len(feature_cols))
 
+    # GRU prediction
     gru_model = load_model(GRU_MODEL_PATH)
     gru_pred_scaled = gru_model.predict(X_live_gru)
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred = target_scaler.inverse_transform(gru_pred_scaled)[0][0]
 
+    # Hybrid XGBoost
     xgb_model = xgb.XGBRegressor(
         n_estimators=300,
         learning_rate=0.03,
@@ -182,15 +186,38 @@ def run_prediction_pipeline():
         objective="reg:squarederror",
         random_state=42
     )
-    
     xgb_model.load_model(XGB_MODEL_PATH)
+
+    # Build hybrid input vector
     hybrid_input = np.hstack([X_live_scaled[-1], [gru_pred]]).reshape(1, -1)
+
+    # ==================== DEBUG PRINTS ====================
+    print("\n===== DEBUG INFO (FOR HYBRID ISSUE) =====")
+
+    print("\nScaled feature row (X_live_scaled[-1]):")
+    print(X_live_scaled[-1])
+
+    print("\nGRU inverse-transformed output (gru_pred):")
+    print(gru_pred)
+
+    print("\nHybrid input vector (40 scaled + 1 GRU):")
+    print(hybrid_input)
+
+    print("\nHybrid input shape:")
+    print(hybrid_input.shape)
+
+    print("===== END DEBUG INFO =====\n")
+    # =======================================================
+
+    # Hybrid prediction
     hybrid_pred = xgb_model.predict(hybrid_input)[0]
 
+    # Final outputs
     current_price = merged["close"].iloc[-1]
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
     return current_price, gru_pred, hybrid_pred, move_pct
+
 
 
 # ============================================================
