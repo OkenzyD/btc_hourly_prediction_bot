@@ -189,7 +189,7 @@ def run_prediction_pipeline():
     xgb_model.load_model(XGB_MODEL_PATH)
 
     # Build hybrid input vector
-    hybrid_input = np.hstack([X_live_scaled[-1], [gru_pred]]).reshape(1, -1)
+    hybrid_input = np.hstack([X_live_scaled[-1], [gru_pred_scaled]]).reshape(1, -1)
 
     # ==================== DEBUG PRINTS ====================
     print("\n===== DEBUG INFO (FOR HYBRID ISSUE) =====")
