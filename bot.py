@@ -161,7 +161,7 @@ def run_prediction_pipeline():
 
     import json
 
-    with open(f"{MODEL_DIR}/{BASE_NAME}_feature_list.json") as f:
+    with open(f"{MODEL_DIR}/{BASE_NAME}_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
         live_features = merged[feature_cols].iloc[-LOOKBACK:]
     
