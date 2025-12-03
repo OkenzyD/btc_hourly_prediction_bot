@@ -225,11 +225,13 @@ def post_to_bluesky(current_price, gru_pred, hybrid_pred, move_pct):
 
 
 if __name__ == "__main__":
-
-    
+    print("===== Cron bot started =====")
     time.sleep(2)
 
-    
-    # Run bot
+    print("Running prediction pipeline...")
     current_price, gru_pred, hybrid_pred, move_pct = run_prediction_pipeline()
+
+    print("Prediction OK, posting to Bluesky...")
     post_to_bluesky(current_price, gru_pred, hybrid_pred, move_pct)
+
+    print("===== Cron bot finished =====")
