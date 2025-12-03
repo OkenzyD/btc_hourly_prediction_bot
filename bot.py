@@ -165,8 +165,16 @@ def run_prediction_pipeline():
         feature_cols = json.load(f)
         live_features = merged[feature_cols[:-1]].iloc[-LOOKBACK:]
     
-    # Scale features
-    feature_scaler = joblib.load(FEATURE_SCALER_PATH)
+        # Scale features
+        feature_scaler = joblib.load(FEATURE_SCALER_PATH)
+        # DEBUG: Print the feature names expected by scaler
+    print("\n===== SCALER FEATURE NAMES (TRUE ORDER) =====")
+    try:
+        print(feature_scaler.feature_names_in_)
+    except:
+        print("Scaler does not provide feature_names_in_")
+    print("=============================================\n")
+
     X_live_scaled = feature_scaler.transform(live_features)
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
