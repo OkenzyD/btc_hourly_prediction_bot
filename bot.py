@@ -148,8 +148,10 @@ def enrich_live_dataset(df):
 
     return df
 
-    # ============================================================
-# 4. PREDICTION PIPELINE  (CORRECTED)
+
+
+# ============================================================
+# 4. PREDICTION PIPELINE (CORRECTED)
 # ============================================================
 def run_prediction_pipeline():
     btc_df = fetch_btc_hourly()
@@ -160,45 +162,40 @@ def run_prediction_pipeline():
 
     import json
 
-    # ============================================================
-    # FIX 1 — Load the FULL 41-feature list (NO gru_pred inside)
-    # ============================================================
+    # 1) Load feature list (NO gru_pred here – only the base features)
     with open(f"{MODEL_DIR}/{BASE_NAME}_XGB_feature_list.json") as f:
-        feature_cols = json.load(f)                     # <<< FIX
-        live_features = merged[feature_cols].iloc[-LOOKBACK:]   # <<< FIX
+        feature_cols = json.load(f)
 
-    # ============================================================
-    # Scale features
-    # ============================================================
+    # Use ALL feature_cols here; they should match scaler.feature_names_in_
+    live_features = merged[feature_cols].iloc[-LOOKBACK:]
+
+    # 2) Scale features with the SAME scaler used in training
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
 
+    # Debug: ensure order matches
     print("\n===== SCALER FEATURE NAMES (TRUE ORDER) =====")
     try:
         print(feature_scaler.feature_names_in_)
-    except:
+    except AttributeError:
         print("Scaler does not provide feature_names_in_")
     print("=============================================\n")
 
     X_live_scaled = feature_scaler.transform(live_features)
 
-    # ============================================================
-    # FIX 2 — Correct GRU input shape (10 × 41 features)
-    # ============================================================
-    X_live_gru = X_live_scaled.reshape(1, LOOKBACK, len(feature_cols))   # <<< FIX
+    # Shape for GRU: (1, LOOKBACK, n_features)
+    X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
-    # ============================================================
-    # GRU prediction
-    # ============================================================
+    # 3) GRU prediction
     gru_model = load_model(GRU_MODEL_PATH)
+
+    # This is the SCALED prediction (model was trained on scaled targets)
     gru_pred_scaled = gru_model.predict(X_live_gru)[0][0]
 
-    # Inverse transform ONLY for reporting — NOT for hybrid model
+    # Inverse-transform to get ACTUAL PRICE (unscaled)
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred = target_scaler.inverse_transform([[gru_pred_scaled]])[0][0]
 
-    # ============================================================
-    # XGBoost hybrid model
-    # ============================================================
+    # 4) Load Hybrid XGBoost model
     xgb_model = xgb.XGBRegressor(
         n_estimators=300,
         learning_rate=0.03,
@@ -210,11 +207,12 @@ def run_prediction_pipeline():
     )
     xgb_model.load_model(XGB_MODEL_PATH)
 
-    # ============================================================
-    # FIX 3 — Build hybrid input using SCALED GRU output
-    # DO NOT use the inverse transformed value (106k)
-    # ============================================================
-    hybrid_input = np.append(X_live_scaled[-1], gru_pred_scaled).reshape(1, -1)  # <<< FIX
+    # 5) Build hybrid input vector
+    #    IMPORTANT: use **gru_pred (UNSCALED)** to match training
+    hybrid_input = np.hstack([
+        X_live_scaled[-1],   # base scaled features
+        [gru_pred]           # unscaled GRU price
+    ]).reshape(1, -1)
 
     # ==================== DEBUG PRINTS ====================
     print("\n===== DEBUG INFO (FOR HYBRID ISSUE) =====")
@@ -222,10 +220,13 @@ def run_prediction_pipeline():
     print("\nScaled feature row (X_live_scaled[-1]):")
     print(X_live_scaled[-1])
 
-    print("\nGRU inverse-transformed output (gru_pred):")
+    print("\nGRU scaled output (gru_pred_scaled):")
+    print(gru_pred_scaled)
+
+    print("\nGRU inverse-transformed output (gru_pred, PRICE):")
     print(gru_pred)
 
-    print("\nHybrid input vector (40 scaled + 1 SCALED GRU):")
+    print("\nHybrid input vector (features + UN-SCALED GRU):")
     print(hybrid_input)
 
     print("\nHybrid input shape:")
@@ -234,15 +235,22 @@ def run_prediction_pipeline():
     print("===== END DEBUG INFO =====\n")
     # =======================================================
 
-    # Hybrid prediction
+    # 6) Hybrid prediction
     hybrid_pred = xgb_model.predict(hybrid_input)[0]
 
-    # Final numbers
+    # Safety guard
     current_price = merged["close"].iloc[-1]
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
-    return current_price, gru_pred, hybrid_pred, move_pct
+    if (hybrid_pred <= 0) or (abs(move_pct) > 30):
+        print(
+            f"[WARN] Hybrid prediction looks unreasonable "
+            f"(price={hybrid_pred:.2f}, move={move_pct:.2f}%). Falling back to GRU."
+        )
+        hybrid_pred = gru_pred
+        move_pct = (hybrid_pred - current_price) / current_price * 100
 
+    return current_price, gru_pred, hybrid_pred, move_pct
 
 # ============================================================
 # 5. POST TO BLUESKY
