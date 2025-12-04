@@ -39,5 +39,5 @@
   "lag_close_24",
   "lag_return_24",
   "sentiment_hourly",
-  "gru_pred"
+ 
 ]
