@@ -148,9 +148,8 @@ def enrich_live_dataset(df):
 
     return df
 
-
-# ============================================================
-# 4. PREDICTION PIPELINE
+    # ============================================================
+# 4. PREDICTION PIPELINE  (CORRECTED)
 # ============================================================
 def run_prediction_pipeline():
     btc_df = fetch_btc_hourly()
@@ -161,13 +160,18 @@ def run_prediction_pipeline():
 
     import json
 
+    # ============================================================
+    # FIX 1 — Load the FULL 41-feature list (NO gru_pred inside)
+    # ============================================================
     with open(f"{MODEL_DIR}/{BASE_NAME}_XGB_feature_list.json") as f:
-        feature_cols = json.load(f)
-        live_features = merged[feature_cols[:-1]].iloc[-LOOKBACK:]
-    
-        # Scale features
-        feature_scaler = joblib.load(FEATURE_SCALER_PATH)
-        # DEBUG: Print the feature names expected by scaler
+        feature_cols = json.load(f)                     # <<< FIX
+        live_features = merged[feature_cols].iloc[-LOOKBACK:]   # <<< FIX
+
+    # ============================================================
+    # Scale features
+    # ============================================================
+    feature_scaler = joblib.load(FEATURE_SCALER_PATH)
+
     print("\n===== SCALER FEATURE NAMES (TRUE ORDER) =====")
     try:
         print(feature_scaler.feature_names_in_)
@@ -176,15 +180,25 @@ def run_prediction_pipeline():
     print("=============================================\n")
 
     X_live_scaled = feature_scaler.transform(live_features)
-    X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
+    # ============================================================
+    # FIX 2 — Correct GRU input shape (10 × 41 features)
+    # ============================================================
+    X_live_gru = X_live_scaled.reshape(1, LOOKBACK, len(feature_cols))   # <<< FIX
+
+    # ============================================================
     # GRU prediction
+    # ============================================================
     gru_model = load_model(GRU_MODEL_PATH)
     gru_pred_scaled = gru_model.predict(X_live_gru)[0][0]
+
+    # Inverse transform ONLY for reporting — NOT for hybrid model
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred = target_scaler.inverse_transform([[gru_pred_scaled]])[0][0]
 
-    # Hybrid XGBoost
+    # ============================================================
+    # XGBoost hybrid model
+    # ============================================================
     xgb_model = xgb.XGBRegressor(
         n_estimators=300,
         learning_rate=0.03,
@@ -196,8 +210,11 @@ def run_prediction_pipeline():
     )
     xgb_model.load_model(XGB_MODEL_PATH)
 
-    # Build hybrid input vector
-    hybrid_input = np.hstack([X_live_scaled[-1], [gru_pred]]).reshape(1, -1)
+    # ============================================================
+    # FIX 3 — Build hybrid input using SCALED GRU output
+    # DO NOT use the inverse transformed value (106k)
+    # ============================================================
+    hybrid_input = np.append(X_live_scaled[-1], gru_pred_scaled).reshape(1, -1)  # <<< FIX
 
     # ==================== DEBUG PRINTS ====================
     print("\n===== DEBUG INFO (FOR HYBRID ISSUE) =====")
@@ -208,7 +225,7 @@ def run_prediction_pipeline():
     print("\nGRU inverse-transformed output (gru_pred):")
     print(gru_pred)
 
-    print("\nHybrid input vector (40 scaled + 1 GRU):")
+    print("\nHybrid input vector (40 scaled + 1 SCALED GRU):")
     print(hybrid_input)
 
     print("\nHybrid input shape:")
@@ -220,12 +237,11 @@ def run_prediction_pipeline():
     # Hybrid prediction
     hybrid_pred = xgb_model.predict(hybrid_input)[0]
 
-    # Final outputs
+    # Final numbers
     current_price = merged["close"].iloc[-1]
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
     return current_price, gru_pred, hybrid_pred, move_pct
-
 
 
 # ============================================================
