@@ -237,6 +237,8 @@ def run_prediction_pipeline():
 
     # 6) Hybrid prediction
     hybrid_pred = xgb_model.predict(hybrid_input)[0]
+    
+    print(f"DEBUG: GRU vs HYBRID raw: gru={gru_pred:.2f}, hybrid={hybrid_pred:.2f}, diff={hybrid_pred - gru_pred:.2f}")
 
     # Safety guard
     current_price = merged["close"].iloc[-1]
