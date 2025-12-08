@@ -65,13 +65,29 @@ def fetch_google_news_sentiment():
     rows = []
 
     for entry in feed.entries:
-        title = entry.title
-        published = pd.to_datetime(entry.published)
+        title = getattr(entry, "title", None)
+        published_raw = getattr(entry, "published", None)
+
+        if not title:
+            continue
+
+        # Safe datetime parsing
+        published = pd.to_datetime(published_raw, errors="coerce")
+
+        if pd.isna(published):
+            # malformed timestamp → skip
+            continue
+
         score = analyzer.polarity_scores(title)["compound"]
         rows.append([published, score])
 
+    # Fallback if no usable rows
     if not rows:
-        return pd.DataFrame(columns=["hour", "sentiment"])
+        print("[WARN] No valid sentiment rows — using neutral sentiment.")
+        return pd.DataFrame({
+            "hour": [pd.Timestamp.utcnow().floor("H")],
+            "sentiment": [0.0]
+        })
 
     df = pd.DataFrame(rows, columns=["published", "sentiment"])
     df["hour"] = df["published"].dt.floor("H")
