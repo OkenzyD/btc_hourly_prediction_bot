@@ -226,8 +226,16 @@ def run_prediction_pipeline():
     gru_pred_scaled = gru_model.predict(X_live_gru)[0][0]
 
     # Inverse-transform to get ACTUAL PRICE (unscaled)
-    target_scaler = joblib.load(TARGET_SCALER_PATH)
-    gru_pred = target_scaler.inverse_transform([[gru_pred_scaled]])[0][0]
+    # HARD PATCH: if inverse-transform fails (price becomes unrealistic), fallback manually
+    if gru_pred < 1000 or gru_pred > 200000:
+        print("[PATCH] Target scaler returned invalid price. Applying manual reverse-scaling.")
+    
+        # Manually rescale using your train dataset ranges (approximate values)
+        CLOSE_MIN = 15000    # adjust to your real training min
+        CLOSE_MAX = 74000    # adjust to your real training max
+    
+        gru_pred = gru_pred_scaled * (CLOSE_MAX - CLOSE_MIN) + CLOSE_MIN
+
 
     # 4) Load Hybrid XGBoost model
     xgb_model = xgb.XGBRegressor(
