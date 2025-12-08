@@ -251,10 +251,11 @@ def run_prediction_pipeline():
 
     # 5) Build hybrid input vector
     #    IMPORTANT: use **gru_pred (UNSCALED)** to match training
-    hybrid_input = np.hstack([
-        X_live_scaled[-1],   # base scaled features
-        [gru_pred]           # unscaled GRU price
+        hybrid_input = np.hstack([
+        X_live_scaled[-1],
+        [gru_pred_scaled]   # <<< this is the correct one
     ]).reshape(1, -1)
+    
 
     # ==================== DEBUG PRINTS ====================
     print("\n===== DEBUG INFO (FOR HYBRID ISSUE) =====")
