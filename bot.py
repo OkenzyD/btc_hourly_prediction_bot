@@ -57,6 +57,9 @@ def fetch_btc_hourly():
 # ============================================================
 # 2. SENTIMENT: GOOGLE NEWS RSS (VADER)
 # ============================================================
+# ============================================================
+# 2. SENTIMENT: GOOGLE NEWS RSS (VADER)
+# ============================================================
 def fetch_google_news_sentiment():
     url = "https://news.google.com/rss/search?q=bitcoin&hl=en-US&gl=US&ceid=US:en"
     feed = feedparser.parse(url)
@@ -71,25 +74,40 @@ def fetch_google_news_sentiment():
         if not title:
             continue
 
-        # Safe datetime parsing
+        # Safe, guarded datetime parsing
         published = pd.to_datetime(published_raw, errors="coerce")
 
         if pd.isna(published):
-            # malformed timestamp → skip
-            continue
+            continue  # skip invalid timestamps
 
         score = analyzer.polarity_scores(title)["compound"]
         rows.append([published, score])
 
-    # Fallback if no usable rows
+    # If nothing valid → fallback neutral sentiment
     if not rows:
-        print("[WARN] No valid sentiment rows — using neutral sentiment.")
-        return pd.DataFrame({
-            "hour": [pd.Timestamp.utcnow().floor("H")],
-            "sentiment": [0.0]
-        })
+        print("[WARN] No usable sentiment rows — applying neutral sentiment.")
+        now_hour = pd.Timestamp.utcnow().floor("H")
+        return pd.DataFrame({"hour": [now_hour], "sentiment": [0.0]})
 
+    # Build DataFrame
     df = pd.DataFrame(rows, columns=["published", "sentiment"])
+
+    # Force datetime conversion again (extra safety)
+    df["published"] = pd.to_datetime(df["published"], errors="coerce")
+
+    # Drop any leftover NaT
+    df = df.dropna(subset=["published"])
+
+    # If everything got removed → fallback
+    if df.empty:
+        now_hour = pd.Timestamp.utcnow().floor("H")
+        return pd.DataFrame({"hour": [now_hour], "sentiment": [0.0]})
+
+    # Safe to use .dt now
+    df["hour"] = df["published"].dt.floor("H")
+
+    return df.groupby("hour")["sentiment"].mean().reset_index()
+
     df["hour"] = df["published"].dt.floor("H")
 
     return df.groupby("hour")["sentiment"].mean().reset_index()
