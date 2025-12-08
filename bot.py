@@ -199,47 +199,38 @@ def run_prediction_pipeline():
     merged = enrich_live_dataset(merged)
 
     import json
-
-    # Load correct feature list used during training
     with open(f"{MODEL_DIR}/{BASE_NAME}_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
 
-    # Live feature window
     live_features = merged[feature_cols].iloc[-LOOKBACK:]
 
-    # Load feature scaler and scale inputs
+    # Scale features
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
     X_live_scaled = feature_scaler.transform(live_features)
 
-    # Prepare GRU input: (1, LOOKBACK, n_features)
+    # GRU input
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
     # ----------------------------------------
-    # 2) GRU PREDICTION
+    # 2) GRU prediction
     # ----------------------------------------
     gru_model = load_model(GRU_MODEL_PATH)
-
-    # GRU outputs a *scaled* target
     gru_pred_scaled = gru_model.predict(X_live_gru)[0][0]
 
-    # Convert back to real price using target scaler
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred = target_scaler.inverse_transform([[gru_pred_scaled]])[0][0]
 
-    # GRU sanity check (must be AFTER defining gru_pred)
+    # Sanity guard AFTER definition
     if gru_pred < 1000 or gru_pred > 200000:
-        print("[WARN] GRU produced unrealistic value. Falling back to latest close.")
+        print("[WARN] GRU gave unrealistic value – using last close")
         gru_pred = merged["close"].iloc[-1]
 
     # ----------------------------------------
-    # 3) HYBRID INPUT (XGBoost)
+    # 3) Hybrid (XGB) input – USE SCALED GRU PRED
     # ----------------------------------------
-    # XGB was trained on:
-    #    → scaled features
-    #    → scaled GRU prediction (NOT unscaled)
     hybrid_input = np.hstack([
-        X_live_scaled[-1],    # scaled feature vector
-        [gru_pred_scaled]     # scaled GRU prediction
+        X_live_scaled[-1],
+        [gru_pred_scaled]
     ]).reshape(1, -1)
 
     # ----------------------------------------
@@ -259,22 +250,18 @@ def run_prediction_pipeline():
     hybrid_pred = xgb_model.predict(hybrid_input)[0]
 
     # ----------------------------------------
-    # 5) Safety guard for hybrid output
+    # 5) Safety guard
     # ----------------------------------------
     current_price = merged["close"].iloc[-1]
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
-    # Flag extreme behavior
     if hybrid_pred <= 0 or abs(move_pct) > 30:
-        print(f"[WARN] Hybrid prediction looks unreasonable "
-              f"(price={hybrid_pred:.2f}, move={move_pct:.2f}%). Using GRU.")
+        print(f"[WARN] Hybrid unrealistic → using GRU")
         hybrid_pred = gru_pred
         move_pct = (hybrid_pred - current_price) / current_price * 100
 
-    # ----------------------------------------
-    # RETURN VALUES
-    # ----------------------------------------
     return current_price, gru_pred, hybrid_pred, move_pct
+
 
 # ============================================================
 # 5. POST TO BLUESKY
