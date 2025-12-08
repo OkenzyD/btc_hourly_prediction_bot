@@ -187,7 +187,11 @@ def enrich_live_dataset(df):
 # ============================================================
 # 4. PREDICTION PIPELINE (CORRECTED)
 # ============================================================
+
 def run_prediction_pipeline():
+    # ----------------------------------------
+    # 1) Fetch BTC + sentiment + features
+    # ----------------------------------------
     btc_df = fetch_btc_hourly()
     sent_df = fetch_google_news_sentiment()
 
@@ -196,48 +200,51 @@ def run_prediction_pipeline():
 
     import json
 
-    # 1) Load feature list (NO gru_pred here – only the base features)
+    # Load correct feature list used during training
     with open(f"{MODEL_DIR}/{BASE_NAME}_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
 
-    # Use ALL feature_cols here; they should match scaler.feature_names_in_
+    # Live feature window
     live_features = merged[feature_cols].iloc[-LOOKBACK:]
 
-    # 2) Scale features with the SAME scaler used in training
+    # Load feature scaler and scale inputs
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
-
-    # Debug: ensure order matches
-    print("\n===== SCALER FEATURE NAMES (TRUE ORDER) =====")
-    try:
-        print(feature_scaler.feature_names_in_)
-    except AttributeError:
-        print("Scaler does not provide feature_names_in_")
-    print("=============================================\n")
-
     X_live_scaled = feature_scaler.transform(live_features)
 
-    # Shape for GRU: (1, LOOKBACK, n_features)
+    # Prepare GRU input: (1, LOOKBACK, n_features)
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
-    # 3) GRU prediction
+    # ----------------------------------------
+    # 2) GRU PREDICTION
+    # ----------------------------------------
     gru_model = load_model(GRU_MODEL_PATH)
 
-    # This is the SCALED prediction (model was trained on scaled targets)
+    # GRU outputs a *scaled* target
     gru_pred_scaled = gru_model.predict(X_live_gru)[0][0]
 
-    # Inverse-transform to get ACTUAL PRICE (unscaled)
-    # HARD PATCH: if inverse-transform fails (price becomes unrealistic), fallback manually
+    # Convert back to real price using target scaler
+    target_scaler = joblib.load(TARGET_SCALER_PATH)
+    gru_pred = target_scaler.inverse_transform([[gru_pred_scaled]])[0][0]
+
+    # GRU sanity check (must be AFTER defining gru_pred)
     if gru_pred < 1000 or gru_pred > 200000:
-        print("[PATCH] Target scaler returned invalid price. Applying manual reverse-scaling.")
-    
-        # Manually rescale using your train dataset ranges (approximate values)
-        CLOSE_MIN = 15000    # adjust to your real training min
-        CLOSE_MAX = 74000    # adjust to your real training max
-    
-        gru_pred = gru_pred_scaled * (CLOSE_MAX - CLOSE_MIN) + CLOSE_MIN
+        print("[WARN] GRU produced unrealistic value. Falling back to latest close.")
+        gru_pred = merged["close"].iloc[-1]
 
+    # ----------------------------------------
+    # 3) HYBRID INPUT (XGBoost)
+    # ----------------------------------------
+    # XGB was trained on:
+    #    → scaled features
+    #    → scaled GRU prediction (NOT unscaled)
+    hybrid_input = np.hstack([
+        X_live_scaled[-1],    # scaled feature vector
+        [gru_pred_scaled]     # scaled GRU prediction
+    ]).reshape(1, -1)
 
-    # 4) Load Hybrid XGBoost model
+    # ----------------------------------------
+    # 4) XGBoost prediction
+    # ----------------------------------------
     xgb_model = xgb.XGBRegressor(
         n_estimators=300,
         learning_rate=0.03,
@@ -249,52 +256,24 @@ def run_prediction_pipeline():
     )
     xgb_model.load_model(XGB_MODEL_PATH)
 
-    # 5) Build hybrid input vector
-    #    IMPORTANT: use **gru_pred (UNSCALED)** to match training
-        hybrid_input = np.hstack([
-        X_live_scaled[-1],
-        [gru_pred_scaled]   # <<< this is the correct one
-    ]).reshape(1, -1)
-    
-
-    # ==================== DEBUG PRINTS ====================
-    print("\n===== DEBUG INFO (FOR HYBRID ISSUE) =====")
-
-    print("\nScaled feature row (X_live_scaled[-1]):")
-    print(X_live_scaled[-1])
-
-    print("\nGRU scaled output (gru_pred_scaled):")
-    print(gru_pred_scaled)
-
-    print("\nGRU inverse-transformed output (gru_pred, PRICE):")
-    print(gru_pred)
-
-    print("\nHybrid input vector (features + UN-SCALED GRU):")
-    print(hybrid_input)
-
-    print("\nHybrid input shape:")
-    print(hybrid_input.shape)
-
-    print("===== END DEBUG INFO =====\n")
-    # =======================================================
-
-    # 6) Hybrid prediction
     hybrid_pred = xgb_model.predict(hybrid_input)[0]
-    
-    
 
-    # Safety guard
+    # ----------------------------------------
+    # 5) Safety guard for hybrid output
+    # ----------------------------------------
     current_price = merged["close"].iloc[-1]
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
-    if (hybrid_pred <= 0) or (abs(move_pct) > 30):
-        print(
-            f"[WARN] Hybrid prediction looks unreasonable "
-            f"(price={hybrid_pred:.2f}, move={move_pct:.2f}%). Falling back to GRU."
-        )
+    # Flag extreme behavior
+    if hybrid_pred <= 0 or abs(move_pct) > 30:
+        print(f"[WARN] Hybrid prediction looks unreasonable "
+              f"(price={hybrid_pred:.2f}, move={move_pct:.2f}%). Using GRU.")
         hybrid_pred = gru_pred
         move_pct = (hybrid_pred - current_price) / current_price * 100
 
+    # ----------------------------------------
+    # RETURN VALUES
+    # ----------------------------------------
     return current_price, gru_pred, hybrid_pred, move_pct
 
 # ============================================================
