@@ -38,5 +38,6 @@
   "lag_return_12",
   "lag_close_24",
   "lag_return_24",
-  "sentiment_hourly"
+  "sentiment_hourly",
+  "gru_pred_scaled"
 ]
