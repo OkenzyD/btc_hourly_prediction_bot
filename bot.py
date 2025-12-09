@@ -239,7 +239,7 @@ def run_prediction_pipeline():
     live_tabular = pd.DataFrame([X_live_scaled[-1]], columns=feature_cols)
     
     # Add GRU scaled prediction (Colab-style)
-    live_tabular["gru_pred"] = gru_pred
+    live_tabular["gru_pred_scaled"] = gru_pred
     
     # Debug output
     print("\n===== TRAINING-SCHEMA HYBRID INPUT =====")
