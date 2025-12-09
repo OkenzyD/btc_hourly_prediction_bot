@@ -187,9 +187,7 @@ def enrich_live_dataset(df):
 # ============================================================
 
 def run_prediction_pipeline():
-    # ----------------------------------------
-    # 1) Fetch BTC + sentiment + features
-    # ----------------------------------------
+    # 1) Fetch data
     btc_df = fetch_btc_hourly()
     sent_df = fetch_google_news_sentiment()
 
@@ -197,43 +195,30 @@ def run_prediction_pipeline():
     merged = enrich_live_dataset(merged)
 
     import json
+
+    # 2) Load correct BTC feature list (no GRU inside it)
     with open(f"{MODEL_DIR}/{BASE_NAME}_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
 
+    # Extract last LOOKBACK rows
     live_features = merged[feature_cols].iloc[-LOOKBACK:]
 
-    # Scale features
+    # 3) Scale features (same feature scaler used during training)
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
+
     X_live_scaled = feature_scaler.transform(live_features)
 
-    # GRU input
+    # Prepare GRU input: shape (1, LOOKBACK, n_features)
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
-    # ----------------------------------------
-    # 2) GRU prediction
-    # ----------------------------------------
+    # 4) Load GRU + make prediction
     gru_model = load_model(GRU_MODEL_PATH)
-    gru_pred_scaled = gru_model.predict(X_live_gru)[0][0]
 
+    gru_pred_scaled = float(gru_model.predict(X_live_gru)[0][0])  # keep scaled version for hybrid
     target_scaler = joblib.load(TARGET_SCALER_PATH)
-    gru_pred = target_scaler.inverse_transform([[gru_pred_scaled]])[0][0]
+    gru_pred = float(target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
 
-    # Sanity guard AFTER definition
-    if gru_pred < 1000 or gru_pred > 200000:
-        print("[WARN] GRU gave unrealistic value – using last close")
-        gru_pred = merged["close"].iloc[-1]
-
-    # ----------------------------------------
-    # 3) Hybrid (XGB) input – USE SCALED GRU PRED
-    # ----------------------------------------
-    hybrid_input = np.hstack([
-        X_live_scaled[-1],
-        [gru_pred_scaled]
-    ]).reshape(1, -1)
-
-    # ----------------------------------------
-    # 4) XGBoost prediction
-    # ----------------------------------------
+    # 5) Load hybrid XGBoost
     xgb_model = xgb.XGBRegressor(
         n_estimators=300,
         learning_rate=0.03,
@@ -245,20 +230,43 @@ def run_prediction_pipeline():
     )
     xgb_model.load_model(XGB_MODEL_PATH)
 
-    hybrid_pred = xgb_model.predict(hybrid_input)[0]
+    # ----------------------------------------------------------
+    #  Use scaled GRU as the final meta-feature
+    # ----------------------------------------------------------
+    hybrid_input = np.hstack([
+        X_live_scaled[-1],     # scaled feature row
+        [gru_pred_scaled]      # *** scaled GRU (correct for hybrid) ***
+    ]).reshape(1, -1)
 
-    # ----------------------------------------
-    # 5) Safety guard
-    # ----------------------------------------
-    current_price = merged["close"].iloc[-1]
+    # Debug
+    print("\n===== DEBUG INFO (HYBRID INPUT) =====")
+    print("Scaled feature row:", X_live_scaled[-1])
+    print("GRU scaled:", gru_pred_scaled)
+    print("GRU unscaled:", gru_pred)
+    print("Hybrid input:", hybrid_input)
+    print("Hybrid shape:", hybrid_input.shape)
+    print("====================================\n")
+
+    # 6) Hybrid prediction
+    try:
+        hybrid_pred = float(xgb_model.predict(hybrid_input)[0])
+    except Exception as e:
+        print("[ERROR] Hybrid prediction failed:", e)
+        print("Using GRU instead.")
+        hybrid_pred = gru_pred
+
+    # 7) Fallback logic
+    current_price = float(merged["close"].iloc[-1])
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
-    if hybrid_pred <= 0 or abs(move_pct) > 30:
-        print(f"[WARN] Hybrid unrealistic → using GRU")
+    # Guard against unreasonable hybrid outputs
+    if (hybrid_pred <= 0) or (abs(move_pct) > 30):
+        print(f"[WARN] Hybrid unrealistic → using GRU instead.")
         hybrid_pred = gru_pred
         move_pct = (hybrid_pred - current_price) / current_price * 100
 
     return current_price, gru_pred, hybrid_pred, move_pct
+
 
 
 # ============================================================
