@@ -233,10 +233,22 @@ def run_prediction_pipeline():
     # ----------------------------------------------------------
     #  Use scaled GRU as the final meta-feature
     # ----------------------------------------------------------
-    hybrid_input = np.hstack([
-        X_live_scaled[-1],     # scaled feature row
-        [gru_pred_scaled]      # *** scaled GRU (correct for hybrid) ***
-    ]).reshape(1, -1)
+    # ---------------------------------------------
+    # BUILD HYBRID INPUT EXACTLY LIKE COLAB TRAINING
+    # ---------------------------------------------
+    
+    # Convert last feature row into DataFrame with correct feature names
+    live_tabular = pd.DataFrame([X_live_scaled[-1]], columns=feature_cols)
+    
+    # Add GRU scaled prediction (Colab-style)
+    live_tabular["gru_pred"] = gru_pred_scaled
+    
+    # Debug output
+    print("\n===== TRAINING-SCHEMA HYBRID INPUT =====")
+    print(live_tabular)
+    print("========================================\n")
+    
+    
 
     # Debug
     print("\n===== DEBUG INFO (HYBRID INPUT) =====")
@@ -248,12 +260,9 @@ def run_prediction_pipeline():
     print("====================================\n")
 
     # 6) Hybrid prediction
-    try:
-        hybrid_pred = float(xgb_model.predict(hybrid_input)[0])
-    except Exception as e:
-        print("[ERROR] Hybrid prediction failed:", e)
-        print("Using GRU instead.")
-        hybrid_pred = gru_pred
+    hybrid_pred = float(xgb_model.predict(live_tabular)[0])
+
+    
 
     # 7) Fallback logic
     current_price = float(merged["close"].iloc[-1])
