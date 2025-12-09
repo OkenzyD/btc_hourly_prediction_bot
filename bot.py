@@ -230,9 +230,7 @@ def run_prediction_pipeline():
     )
     xgb_model.load_model(XGB_MODEL_PATH)
 
-    # ----------------------------------------------------------
-    #  Use scaled GRU as the final meta-feature
-    # ----------------------------------------------------------
+    
     # ---------------------------------------------
     # BUILD HYBRID INPUT EXACTLY LIKE COLAB TRAINING
     # ---------------------------------------------
@@ -250,14 +248,6 @@ def run_prediction_pipeline():
     
     
 
-    # Debug
-    print("\n===== DEBUG INFO (HYBRID INPUT) =====")
-    print("Scaled feature row:", X_live_scaled[-1])
-    print("GRU scaled:", gru_pred_scaled)
-    print("GRU unscaled:", gru_pred)
-    print("Hybrid input:", hybrid_input)
-    print("Hybrid shape:", hybrid_input.shape)
-    print("====================================\n")
 
     # 6) Hybrid prediction
     hybrid_pred = float(xgb_model.predict(live_tabular)[0])
