@@ -233,10 +233,16 @@ def run_prediction_pipeline():
     # 9) Hybrid prediction
     hybrid_pred = float(xgb_model.predict(live_tabular)[0])
 
+    
     # 10) Fallback check
     current_price = float(merged["close"].iloc[-1])
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
+    # ---- DEBUG: log final numbers ----
+    print(f"[DEBUG] current={current_price:.2f}, "
+          f"gru={gru_pred:.2f}, hybrid_raw={hybrid_pred:.2f}, "
+          f"move={move_pct:.2f}%")
+    
     if hybrid_pred <= 0 or abs(move_pct) > 30:
         print("[WARN] Hybrid unrealistic → using GRU instead.")
         hybrid_pred = gru_pred
