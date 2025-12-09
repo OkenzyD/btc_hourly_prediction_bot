@@ -224,7 +224,7 @@ def run_prediction_pipeline():
 
     # 8) Build hybrid input EXACTLY like training
     live_tabular = pd.DataFrame([X_live_scaled[-1]], columns=feature_cols[:-1])
-    live_tabular["gru_pred_scaled"] = gru_pred_scaled
+    live_tabular["gru_pred"] = gru_pred_scaled
 
     print("\n===== TRAINING-SCHEMA HYBRID INPUT =====")
     print(live_tabular)
