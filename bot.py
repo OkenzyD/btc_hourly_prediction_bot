@@ -195,62 +195,54 @@ def run_prediction_pipeline():
     merged = enrich_live_dataset(merged)
 
     import json
-
-    # 2) Load BTC feature list (with gru_pred_scaled INCLUDED)
+    
+    # 2) Load feature list (must include gru_pred_scaled at end)
     with open(f"{MODEL_DIR}/{BASE_NAME}_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
 
-    # Extract last LOOKBACK rows of the 40 base features
+    # 3) Select ONLY the 40 base features for scaling
     live_features = merged[feature_cols[:-1]].iloc[-LOOKBACK:]
+    live_features = live_features.fillna(0).replace([np.inf, -np.inf], 0)
 
-    # 3) Scale features (same scaler as in training)
+    # 4) Scale base features
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
     X_live_scaled = feature_scaler.transform(live_features)
 
-    # Prepare GRU input (1, LOOKBACK, 40)
+    # 5) Prepare GRU input
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
-    # 4) GRU prediction (scaled → unscaled)
+    # 6) Run GRU (scaled → unscaled)
     gru_model = load_model(GRU_MODEL_PATH)
     gru_pred_scaled = float(gru_model.predict(X_live_gru)[0][0])
 
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred = float(target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
 
-    # 5) Load XGBoost hybrid model
+    # 7) Load XGB
     xgb_model = xgb.XGBRegressor()
     xgb_model.load_model(XGB_MODEL_PATH)
 
-    # ---------------------------------------------------------
-    # BUILD HYBRID INPUT EXACTLY LIKE COLAB TRAINING
-    # ---------------------------------------------------------
-    # Base features (scaled)
+    # 8) Build hybrid input EXACTLY like training
     live_tabular = pd.DataFrame([X_live_scaled[-1]], columns=feature_cols[:-1])
-
-    # Add the scaled GRU pred with correct training column name
     live_tabular["gru_pred_scaled"] = gru_pred_scaled
 
-    # Debug
     print("\n===== TRAINING-SCHEMA HYBRID INPUT =====")
     print(live_tabular)
     print("========================================\n")
 
-    # 6) Hybrid prediction
+    # 9) Hybrid prediction
     hybrid_pred = float(xgb_model.predict(live_tabular)[0])
 
-    # 7) Sanity checks
+    # 10) Fallback check
     current_price = float(merged["close"].iloc[-1])
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
-    # Guard against unreasonable hybrid outputs
     if hybrid_pred <= 0 or abs(move_pct) > 30:
         print("[WARN] Hybrid unrealistic → using GRU instead.")
         hybrid_pred = gru_pred
         move_pct = (hybrid_pred - current_price) / current_price * 100
 
     return current_price, gru_pred, hybrid_pred, move_pct
-
-
 
 
 # ============================================================
