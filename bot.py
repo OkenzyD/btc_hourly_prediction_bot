@@ -183,72 +183,98 @@ def enrich_live_dataset(df):
 
 
 # ============================================================
-# 4. PREDICTION PIPELINE )
+# 4. PREDICTION PIPELINE (DELTA HYBRID — FIXED & CLEAN)
 # ============================================================
 
-
-
-
-
-#==============================
-# 4. prediction pipeline
-#===========================
-
 def run_prediction_pipeline():
+    # -------------------------------------------------------
     # 1) Fetch data
+    # -------------------------------------------------------
     btc_df = fetch_btc_hourly()
     sent_df = fetch_google_news_sentiment()
 
     merged = merge_sentiment_with_decay(btc_df, sent_df)
     merged = enrich_live_dataset(merged)
 
-    import json
-    
+    # -------------------------------------------------------
     # 2) Load DELTA feature list
+    # -------------------------------------------------------
+    import json
     with open(f"{MODEL_DIR}/{BASE_NAME}_DELTA_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
 
-    # Base features (first 40)
-    base_features = feature_cols[:-1]   # last is "gru_pred_raw"
+    base_features = feature_cols[:-1]  # last col is "gru_pred_raw"
 
-    # 3) Select last LOOKBACK rows for GRU
-    live_features = merged[base_features].iloc[-LOOKBACK:]
+    # -------------------------------------------------------
+    # 3) Critical FIX:
+    # Ensure sentiment_hourly exists & is clean
+    # -------------------------------------------------------
+    if "sentiment_hourly" not in merged.columns:
+        print("[WARN] sentiment_hourly missing — injecting neutral = 0")
+        merged["sentiment_hourly"] = 0
+
+    merged["sentiment_hourly"] = (
+        merged["sentiment_hourly"]
+        .fillna(0)
+        .replace([np.inf, -np.inf], 0)
+    )
+
+    # -------------------------------------------------------
+    # 4) Select last LOOKBACK rows for GRU input
+    # -------------------------------------------------------
+    live_features = merged[base_features].iloc[-LOOKBACK:].copy()
     live_features = live_features.fillna(0).replace([np.inf, -np.inf], 0)
 
-    # 4) Scale base features
+    # -------------------------------------------------------
+    # 5) Scale base features
+    # -------------------------------------------------------
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
     X_live_scaled = feature_scaler.transform(live_features)
 
-    # 5) GRU input
+    # GRU expects shape: (1, 10, 40)
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
-    # 6) Run GRU
+    # -------------------------------------------------------
+    # 6) Run GRU model (scaled → unscaled)
+    # -------------------------------------------------------
     gru_model = load_model(GRU_MODEL_PATH)
     gru_pred_scaled = float(gru_model.predict(X_live_gru)[0][0])
 
-    # Convert GRU prediction back to USD
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred_raw = float(target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
 
-    # 7) Load XGB Delta model
+    # -------------------------------------------------------
+    # 7) Load XGBoost delta-correction model
+    # -------------------------------------------------------
     xgb_model = xgb.XGBRegressor()
     xgb_model.load_model(XGB_MODEL_PATH)
 
-    # 8) Prepare XGB delta input EXACTLY like training
-    live_tabular = pd.DataFrame([X_live_scaled[-1]], columns=base_features)
-    live_tabular["gru_pred_raw"] = gru_pred_raw   # <— THIS IS THE CORRECT COLUMN
+    # -------------------------------------------------------
+    # 8) Build XGB input exactly like training
+    # -------------------------------------------------------
+    last_scaled = X_live_scaled[-1]
+    live_tabular = pd.DataFrame([last_scaled], columns=base_features)
 
-    print("\n===== DELTA HYBRID INPUT =====")
+    # Important: XGB delta model was trained using raw GRU prediction
+    live_tabular["gru_pred_raw"] = gru_pred_raw
+
+    print("\n===== DELTA HYBRID INPUT (DEBUG) =====")
     print(live_tabular)
-    print("================================\n")
+    print("======================================\n")
 
+    # -------------------------------------------------------
     # 9) Predict delta correction
+    # -------------------------------------------------------
     delta_pred = float(xgb_model.predict(live_tabular)[0])
 
-    # 10) Final price = GRU raw + delta correction
+    # -------------------------------------------------------
+    # 10) Final hybrid price = GRU_raw + delta correction
+    # -------------------------------------------------------
     hybrid_pred = gru_pred_raw + delta_pred
 
+    # -------------------------------------------------------
     # 11) Safety / sanity check
+    # -------------------------------------------------------
     current_price = float(merged["close"].iloc[-1])
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
@@ -259,7 +285,7 @@ def run_prediction_pipeline():
     )
 
     if hybrid_pred <= 0 or abs(move_pct) > 30:
-        print("[WARN] Unstable delta → fallback to GRU.")
+        print("[WARN] Unstable hybrid result — fallback to GRU only.")
         hybrid_pred = gru_pred_raw
         move_pct = (hybrid_pred - current_price) / current_price * 100
 
