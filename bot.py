@@ -30,7 +30,7 @@ MODEL_DIR = os.environ.get("MODEL_DIR", ".")
 FEATURE_SCALER_PATH = f"{MODEL_DIR}/{BASE_NAME}_FeatureScaler.pkl"
 TARGET_SCALER_PATH  = f"{MODEL_DIR}/{BASE_NAME}_TargetScaler.pkl"
 GRU_MODEL_PATH      = f"{MODEL_DIR}/{BASE_NAME}_GRU_target_close_L10.keras"
-XGB_MODEL_PATH      = f"{MODEL_DIR}/{BASE_NAME}_HYBRID_L10_xgb.json"
+XGB_MODEL_PATH = f"{MODEL_DIR}/{BASE_NAME}_DELTA_HYBRID_L10_xgb.json"
 
 # Bluesky credentials stored as Render environment variables
 BSKY_HANDLE       = os.environ.get("BSKY_HANDLE")
@@ -183,8 +183,16 @@ def enrich_live_dataset(df):
 
 
 # ============================================================
-# 4. PREDICTION PIPELINE (CORRECTED)
+# 4. PREDICTION PIPELINE )
 # ============================================================
+
+
+
+
+
+#==============================
+# 4. prediction pipeline
+#===========================
 
 def run_prediction_pipeline():
     # 1) Fetch data
@@ -196,59 +204,66 @@ def run_prediction_pipeline():
 
     import json
     
-    # 2) Load feature list (must include gru_pred_scaled at end)
-    with open(f"{MODEL_DIR}/{BASE_NAME}_XGB_feature_list.json") as f:
+    # 2) Load DELTA feature list
+    with open(f"{MODEL_DIR}/{BASE_NAME}_DELTA_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
 
-    # 3) Select ONLY the 40 base features for scaling
-    live_features = merged[feature_cols[:-1]].iloc[-LOOKBACK:]
+    # Base features (first 40)
+    base_features = feature_cols[:-1]   # last is "gru_pred_raw"
+
+    # 3) Select last LOOKBACK rows for GRU
+    live_features = merged[base_features].iloc[-LOOKBACK:]
     live_features = live_features.fillna(0).replace([np.inf, -np.inf], 0)
 
     # 4) Scale base features
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
     X_live_scaled = feature_scaler.transform(live_features)
 
-    # 5) Prepare GRU input
+    # 5) GRU input
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
-    # 6) Run GRU (scaled → unscaled)
+    # 6) Run GRU
     gru_model = load_model(GRU_MODEL_PATH)
     gru_pred_scaled = float(gru_model.predict(X_live_gru)[0][0])
 
+    # Convert GRU prediction back to USD
     target_scaler = joblib.load(TARGET_SCALER_PATH)
-    gru_pred = float(target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
+    gru_pred_raw = float(target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
 
-    # 7) Load XGB
+    # 7) Load XGB Delta model
     xgb_model = xgb.XGBRegressor()
     xgb_model.load_model(XGB_MODEL_PATH)
 
-    # 8) Build hybrid input EXACTLY like training
-    live_tabular = pd.DataFrame([X_live_scaled[-1]], columns=feature_cols[:-1])
-    live_tabular["gru_pred"] = gru_pred_scaled
+    # 8) Prepare XGB delta input EXACTLY like training
+    live_tabular = pd.DataFrame([X_live_scaled[-1]], columns=base_features)
+    live_tabular["gru_pred_raw"] = gru_pred_raw   # <— THIS IS THE CORRECT COLUMN
 
-    print("\n===== TRAINING-SCHEMA HYBRID INPUT =====")
+    print("\n===== DELTA HYBRID INPUT =====")
     print(live_tabular)
-    print("========================================\n")
+    print("================================\n")
 
-    # 9) Hybrid prediction
-    hybrid_pred = float(xgb_model.predict(live_tabular)[0])
+    # 9) Predict delta correction
+    delta_pred = float(xgb_model.predict(live_tabular)[0])
 
-    
-    # 10) Fallback check
+    # 10) Final price = GRU raw + delta correction
+    hybrid_pred = gru_pred_raw + delta_pred
+
+    # 11) Safety / sanity check
     current_price = float(merged["close"].iloc[-1])
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
-    # ---- DEBUG: log final numbers ----
-    print(f"[DEBUG] current={current_price:.2f}, "
-          f"gru={gru_pred:.2f}, hybrid_raw={hybrid_pred:.2f}, "
-          f"move={move_pct:.2f}%")
-    
+    print(
+        f"[DEBUG] Current={current_price:.2f}, "
+        f"GRU={gru_pred_raw:.2f}, Delta={delta_pred:.2f}, "
+        f"Hybrid={hybrid_pred:.2f}, Move={move_pct:.2f}%"
+    )
+
     if hybrid_pred <= 0 or abs(move_pct) > 30:
-        print("[WARN] Hybrid unrealistic → using GRU instead.")
-        hybrid_pred = gru_pred
+        print("[WARN] Unstable delta → fallback to GRU.")
+        hybrid_pred = gru_pred_raw
         move_pct = (hybrid_pred - current_price) / current_price * 100
 
-    return current_price, gru_pred, hybrid_pred, move_pct
+    return current_price, gru_pred_raw, hybrid_pred, move_pct
 
 
 # ============================================================
