@@ -137,7 +137,6 @@ def enrich_live_dataset(df):
     df = df.copy().sort_values("timestamp").reset_index(drop=True)
 
     # ============================================================
-    #  🔥 MANDATORY FIX:
     #  Ensure 'sentiment_hourly' ALWAYS exists BEFORE shifting
     # ============================================================
     if "sentiment_hourly" not in df.columns:
@@ -217,43 +216,56 @@ def run_prediction_pipeline():
     # -------------------------------------------------------
     # 2) Load DELTA feature list
     # -------------------------------------------------------
-    import json
     with open(f"{MODEL_DIR}/{BASE_NAME}_DELTA_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
 
-    base_features = feature_cols[:-1]  # last col is "gru_pred_raw"
+    # First 40 are the tabular features, last one is "gru_pred_raw"
+    base_features = feature_cols[:-1]
 
     # -------------------------------------------------------
-    # 3) Critical FIX:
-    # Ensure sentiment_hourly exists & is clean
+    # 3) Make sure sentiment_hourly exists & is numeric
+    #    (extra safety – avoids KeyError when selecting base_features)
     # -------------------------------------------------------
     if "sentiment_hourly" not in merged.columns:
-        print("[WARN] sentiment_hourly missing — injecting neutral = 0")
-        merged["sentiment_hourly"] = 0
+        print("[WARN] sentiment_hourly missing in merged — injecting neutral 0")
+        merged["sentiment_hourly"] = 0.0
 
     merged["sentiment_hourly"] = (
         merged["sentiment_hourly"]
         .fillna(0)
         .replace([np.inf, -np.inf], 0)
+        .astype(float)
     )
 
     # -------------------------------------------------------
-    # 4) Select last LOOKBACK rows for GRU input
+    # 4) Select last LOOKBACK rows for GRU / scaler
     # -------------------------------------------------------
     live_features = merged[base_features].iloc[-LOOKBACK:].copy()
     live_features = live_features.fillna(0).replace([np.inf, -np.inf], 0)
 
     # -------------------------------------------------------
-    # 5) Scale base features
+    # 5) Load scaler and enforce exact feature set / order
     # -------------------------------------------------------
     feature_scaler = joblib.load(FEATURE_SCALER_PATH)
+    required_cols = list(feature_scaler.feature_names_in_)
+
+    # Ensure every feature the scaler expects exists
+    for col in required_cols:
+        if col not in live_features.columns:
+            print(f"[WARN] Missing feature '{col}' → inserting default 0")
+            live_features[col] = 0.0
+
+    # Reorder columns to match scaler training order
+    live_features = live_features[required_cols]
+
+    # Scale
     X_live_scaled = feature_scaler.transform(live_features)
 
-    # GRU expects shape: (1, 10, 40)
+    # GRU expects shape: (1, LOOKBACK, n_features=40)
     X_live_gru = X_live_scaled.reshape(1, LOOKBACK, X_live_scaled.shape[1])
 
     # -------------------------------------------------------
-    # 6) Run GRU model (scaled → unscaled)
+    # 6) Run GRU model (scaled → unscaled price)
     # -------------------------------------------------------
     gru_model = load_model(GRU_MODEL_PATH)
     gru_pred_scaled = float(gru_model.predict(X_live_gru)[0][0])
@@ -268,20 +280,21 @@ def run_prediction_pipeline():
     xgb_model.load_model(XGB_MODEL_PATH)
 
     # -------------------------------------------------------
-    # 8) Build XGB input exactly like training
+    # 8) Build XGB input exactly like in delta training
+    #    - base features (scaled)
+    #    - plus raw GRU prediction
     # -------------------------------------------------------
     last_scaled = X_live_scaled[-1]
-    live_tabular = pd.DataFrame([last_scaled], columns=base_features)
-
-    # Important: XGB delta model was trained using raw GRU prediction
-    live_tabular["gru_pred_raw"] = gru_pred_raw
+    # Use the same base feature names that were used in training
+    live_tabular = pd.DataFrame([last_scaled], columns=required_cols)
+    live_tabular["gru_pred_raw"] = gru_pred_raw  # extra feature column
 
     print("\n===== DELTA HYBRID INPUT (DEBUG) =====")
     print(live_tabular)
     print("======================================\n")
 
     # -------------------------------------------------------
-    # 9) Predict delta correction
+    # 9) Predict delta correction (in raw price units)
     # -------------------------------------------------------
     delta_pred = float(xgb_model.predict(live_tabular)[0])
 
@@ -308,7 +321,6 @@ def run_prediction_pipeline():
         move_pct = (hybrid_pred - current_price) / current_price * 100
 
     return current_price, gru_pred_raw, hybrid_pred, move_pct
-
 
 # ============================================================
 # 5. POST TO BLUESKY
