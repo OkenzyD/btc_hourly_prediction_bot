@@ -369,8 +369,8 @@ def post_to_bluesky(current_price, gru_pred, hybrid_pred, move_pct):
     msg = (
         f"BTC Hourly Forecast\n"
         f"Current: ${current_price:,.2f}\n"
-        f"GRU:     ${gru_pred:,.2f}\n"
-        f"Hybrid:  ${hybrid_pred:,.2f}\n"
+        f"GRU_pred1:     ${gru_pred:,.2f}\n"
+        f"Hybrid_pred2:  ${hybrid_pred:,.2f}\n"
         f"Move:    {move_pct:.2f}% {direction}\n"
         f"#Bitcoin #AI #Crypto"
     )
