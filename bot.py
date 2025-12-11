@@ -273,6 +273,19 @@ def run_prediction_pipeline():
 
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred_raw = float(target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
+    
+        # -------------------------------------------------------
+    # TRUST GATE FOR GRU (Option C)
+    # -------------------------------------------------------
+    current_price = float(merged["close"].iloc[-1])
+    gru_deviation_pct = abs((gru_pred_raw - current_price) / current_price * 100)
+    
+    # If GRU is off by more than 4%, do not trust the GRU or delta
+    if gru_deviation_pct > 4:
+        print(f"[WARN] GRU deviation too high ({gru_deviation_pct:.2f}%) — ignoring hybrid model")
+        hybrid_pred = current_price
+        move_pct = 0.0
+        return current_price, gru_pred_raw, hybrid_pred, move_pct
 
     # -------------------------------------------------------
     # 7) Load XGBoost delta-correction model
