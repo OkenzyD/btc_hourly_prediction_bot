@@ -298,16 +298,29 @@ def run_prediction_pipeline():
     print(live_tabular)
     print("======================================\n")
 
-    # -------------------------------------------------------
-    # 9) Predict delta correction (in raw price units)
-    # -------------------------------------------------------
+    
+
+
+
+    # Prediction delta (in raw price units)
+
+
+
     delta_pred = float(xgb_model.predict(live_tabular)[0])
-
+    
     # -------------------------------------------------------
-    # 10) Final hybrid price = GRU_raw + delta correction
+    # OPTION  — Safety clamp (prevents crazy predictions)
     # -------------------------------------------------------
-    hybrid_pred = gru_pred_raw + delta_pred
-
+    # Limits delta to a realistic correction band
+    delta_pred = np.clip(delta_pred, -2000, 2000)
+    
+    # -------------------------------------------------------
+    # OPTION  — Blended delta correction
+    # -------------------------------------------------------
+    # Only apply part of the delta to avoid overreacting
+    BLEND = 0.35   # 35% delta influence
+    
+    hybrid_pred = gru_pred_raw + BLEND * delta_pred
     # -------------------------------------------------------
     # 11) Safety / sanity check
     # -------------------------------------------------------
