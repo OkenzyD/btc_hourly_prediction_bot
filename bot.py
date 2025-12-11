@@ -285,10 +285,14 @@ def run_prediction_pipeline():
     #    - base features (scaled)
     #    - plus raw GRU prediction
     # -------------------------------------------------------
+    # XGB delta expects EXACTLY 40 scaled features
     last_scaled = X_live_scaled[-1]
-    # Use the same base feature names that were used in training
     live_tabular = pd.DataFrame([last_scaled], columns=required_cols)
-    live_tabular["gru_pred_raw"] = gru_pred_raw  # extra feature column
+    
+    print("\n===== DELTA HYBRID INPUT (DEBUG) =====")
+    print(live_tabular)
+    print("======================================\n")
+
 
     print("\n===== DELTA HYBRID INPUT (DEBUG) =====")
     print(live_tabular)
