@@ -127,11 +127,29 @@ def merge_sentiment_with_decay(btc_df, sent_df, decay=0.97):
     return merged
 
 
+    
+
+
 # ============================================================
 # 3. FEATURE ENGINEERING (MATCHES DISSERTATION)
 # ============================================================
 def enrich_live_dataset(df):
     df = df.copy().sort_values("timestamp").reset_index(drop=True)
+
+    # ============================================================
+    #  🔥 MANDATORY FIX:
+    #  Ensure 'sentiment_hourly' ALWAYS exists BEFORE shifting
+    # ============================================================
+    if "sentiment_hourly" not in df.columns:
+        print("[WARN] sentiment_hourly missing — injecting neutral 0")
+        df["sentiment_hourly"] = 0.0
+
+    df["sentiment_hourly"] = (
+        df["sentiment_hourly"]
+        .fillna(0)
+        .replace([np.inf, -np.inf], 0)
+        .astype(float)
+    )
 
     df["rsi_14"] = ta.momentum.RSIIndicator(df["close"], 14).rsi()
 
