@@ -342,9 +342,39 @@ def run_prediction_pipeline():
     
     # Final hybrid price (multiplicative correction)
     hybrid_pred = gru_pred_raw * (1 + pct_error_pred)
+
+
+      # -------------------------------
+    # REALISM GUARDRAIL 
+    # -------------------------------
+    current_price = float(merged["close"].iloc[-1])
+    
+    # Use your already-engineered volatility
+    vol = float(merged["rolling_volatility"].iloc[-1])
+    if np.isnan(vol) or vol <= 0:
+        vol = current_price * 0.002  # fallback vol = 0.2%
+    
+    # Convert vol to a move band
+    raw_vol_pct = vol / current_price            # e.g. 0.003 = 0.3%
+    max_move_pct = raw_vol_pct * 1.5             # K=1.5 (tweakable)
+    max_move_pct = float(np.clip(max_move_pct, 0.0025, 0.02))  # 0.25% .. 2.0%
+    
+    # Clamp your model output to realistic hourly move
+    raw_move_pct = (hybrid_pred - current_price) / current_price
+    clamped_move_pct = float(np.clip(raw_move_pct, -max_move_pct, max_move_pct))
+    hybrid_pred = current_price * (1 + clamped_move_pct)
+    
+    # recompute move_pct after clamping
+    move_pct = clamped_move_pct * 100
+
     # -------------------------------------------------------
     # 11) Safety / sanity check
     # -------------------------------------------------------
+
+
+
+
+
     current_price = float(merged["close"].iloc[-1])
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
@@ -355,12 +385,12 @@ def run_prediction_pipeline():
     f"Hybrid={hybrid_pred:.2f}, "
     f"Move={move_pct:.2f}%"
     )
-    if hybrid_pred <= 0 or abs(move_pct) > 30:
-        print("[WARN] Unstable hybrid result — fallback to GRU only.")
-        hybrid_pred = gru_pred_raw
-        move_pct = (hybrid_pred - current_price) / current_price * 100
+   # if hybrid_pred <= 0 or abs(move_pct) > 30:
+    #    print("[WARN] Unstable hybrid result — fallback to GRU only.")
+     #   hybrid_pred = gru_pred_raw
+    #    move_pct = (hybrid_pred - current_price) / current_price * 100
 
-    return current_price, gru_pred_raw, hybrid_pred, move_pct
+   # return current_price, gru_pred_raw, hybrid_pred, move_pct
 
 # ============================================================
 # 5. POST TO BLUESKY
