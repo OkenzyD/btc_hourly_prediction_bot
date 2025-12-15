@@ -31,7 +31,7 @@ MODEL_DIR = os.environ.get("MODEL_DIR", ".")
 FEATURE_SCALER_PATH = f"{MODEL_DIR}/{BASE_NAME}_FeatureScaler.pkl"
 TARGET_SCALER_PATH  = f"{MODEL_DIR}/{BASE_NAME}_TargetScaler.pkl"
 GRU_MODEL_PATH      = f"{MODEL_DIR}/{BASE_NAME}_GRU_target_close_L10.keras"
-XGB_MODEL_PATH = f"{MODEL_DIR}/{BASE_NAME}_DELTA_HYBRID_L10_xgb.json"
+XGB_MODEL_PATH = f"{MODEL_DIR}/{BASE_NAME}_PCT_ERROR_HYBRID_L10_xgb.json"
 
 # Bluesky credentials stored as Render environment variables
 BSKY_HANDLE       = os.environ.get("BSKY_HANDLE")
@@ -217,7 +217,7 @@ def run_prediction_pipeline():
     # -------------------------------------------------------
     # 2) Load DELTA feature list
     # -------------------------------------------------------
-    with open(f"{MODEL_DIR}/{BASE_NAME}_DELTA_XGB_feature_list.json") as f:
+    with open(f"{MODEL_DIR}/{BASE_NAME}_PCT_ERROR_XGB_feature_list.json") as f:
         feature_cols = json.load(f)
 
     # First 40 are the tabular features, last one is "gru_pred_raw"
@@ -301,39 +301,49 @@ def run_prediction_pipeline():
     # XGB delta expects EXACTLY 40 scaled features
     last_scaled = X_live_scaled[-1]
     live_tabular = pd.DataFrame([last_scaled], columns=required_cols)
+
+    # -------------------------------------------------------
+    # GRU INFERENCE (DEFINE gru_pred_raw)
+    # -------------------------------------------------------
+    gru_model = load_model(GRU_MODEL_PATH)
     
-    print("\n===== DELTA HYBRID INPUT (DEBUG) =====")
+    # GRU expects (1, LOOKBACK, n_features)
+    X_live_gru = live_features.values.reshape(
+        1,
+        LOOKBACK,
+        live_features.shape[1]
+    )
+    
+    # Predict scaled close
+    gru_pred_scaled = float(gru_model.predict(X_live_gru, verbose=0)[0][0])
+    
+    # Convert back to raw USD price
+    target_scaler = joblib.load(TARGET_SCALER_PATH)
+    gru_pred_raw = float(
+        target_scaler.inverse_transform([[gru_pred_scaled]])[0][0]
+    
+    
+    print(f"[DEBUG] GRU raw prediction: {gru_pred_raw:.2f}")
+    
+    print("\n===== %-ERROR HYBRID INPUT (DEBUG) =====")
     print(live_tabular)
-    print("======================================\n")
-
-
-    print("\n===== DELTA HYBRID INPUT (DEBUG) =====")
-    print(live_tabular)
-    print("======================================\n")
+    print("=======================================\n")
 
     
+  
 
 
 
-    # Prediction delta (in raw price units)
-
-
-
-    delta_pred = float(xgb_model.predict(live_tabular)[0])
+     # -------------------------------------------------------
+    # %-ERROR XGBOOST PREDICTION
+    # -------------------------------------------------------
+    pct_error_pred = float(xgb_model.predict(live_tabular)[0])
     
-    # -------------------------------------------------------
-    # OPTION  — Safety clamp (prevents crazy predictions)
-    # -------------------------------------------------------
-    # Limits delta to a realistic correction band
-    delta_pred = np.clip(delta_pred, -2000, 2000)
+    # Safety clamp (percentage space, NOT price space)
+    pct_error_pred = np.clip(pct_error_pred, -0.05, 0.05)  # ±5%
     
-    # -------------------------------------------------------
-    # OPTION  — Blended delta correction
-    # -------------------------------------------------------
-    # Only apply part of the delta to avoid overreacting
-    BLEND = 0.35   # 35% delta influence
-    
-    hybrid_pred = gru_pred_raw + BLEND * delta_pred
+    # Final hybrid price (multiplicative correction)
+    hybrid_pred = gru_pred_raw * (1 + pct_error_pred)
     # -------------------------------------------------------
     # 11) Safety / sanity check
     # -------------------------------------------------------
@@ -341,11 +351,12 @@ def run_prediction_pipeline():
     move_pct = (hybrid_pred - current_price) / current_price * 100
 
     print(
-        f"[DEBUG] Current={current_price:.2f}, "
-        f"GRU={gru_pred_raw:.2f}, Delta={delta_pred:.2f}, "
-        f"Hybrid={hybrid_pred:.2f}, Move={move_pct:.2f}%"
+    f"[DEBUG] Current={current_price:.2f}, "
+    f"GRU={gru_pred_raw:.2f}, "
+    f"PctError={pct_error_pred:.4f}, "
+    f"Hybrid={hybrid_pred:.2f}, "
+    f"Move={move_pct:.2f}%"
     )
-
     if hybrid_pred <= 0 or abs(move_pct) > 30:
         print("[WARN] Unstable hybrid result — fallback to GRU only.")
         hybrid_pred = gru_pred_raw
