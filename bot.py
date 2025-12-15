@@ -320,7 +320,7 @@ def run_prediction_pipeline():
     # Convert back to raw USD price
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred_raw = float(
-        target_scaler.inverse_transform([[gru_pred_scaled]])[0][0]
+        target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
     
     
     print(f"[DEBUG] GRU raw prediction: {gru_pred_raw:.2f}")
