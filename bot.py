@@ -288,7 +288,7 @@ def run_prediction_pipeline():
         vol = current_price * 0.002  # 0.2% fallback
 
     raw_vol_pct = vol / current_price
-    max_move_pct = float(np.clip(raw_vol_pct * 1.5, 0.0025, 0.02))  # 0.25%..2%
+    max_move_pct = float(np.clip(max_move_pct, 0.005, 0.03))  # 0.25%..2%
 
     direction = 1.0 if gru_pred_raw >= current_price else -1.0
     clamped_move_pct = direction * max_move_pct
