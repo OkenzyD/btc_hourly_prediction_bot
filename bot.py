@@ -280,10 +280,10 @@ def run_prediction_pipeline():
     gru_deviation_pct = abs((gru_pred_raw - current_price) / current_price)
 
     if gru_deviation_pct > 0.04:  # 4%
-    print(f"[WARN] GRU deviation too high ({gru_deviation_pct*100:.2f}%) — applying realism clamp instead of freezing")
+        print(f"[WARN] GRU deviation too high ({gru_deviation_pct*100:.2f}%) — applying realism clamp instead of freezing")
 
     # build a small realistic move using volatility
-    vol = float(merged["rolling_volatility"].iloc[-1])
+        vol = float(merged["rolling_volatility"].iloc[-1])
     if np.isnan(vol) or vol <= 0:
         vol = current_price * 0.002  # 0.2% fallback
 
@@ -296,7 +296,7 @@ def run_prediction_pipeline():
     hybrid_pred = current_price * (1 + clamped_move_pct)
     move_pct = clamped_move_pct * 100
 
-    return current_price, gru_pred_raw, hybrid_pred, move_pct
+    
 
     # -------------------------------------------------------
     # 7) Load XGBoost delta-correction model
