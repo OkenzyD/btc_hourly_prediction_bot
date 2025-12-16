@@ -275,17 +275,28 @@ def run_prediction_pipeline():
     gru_pred_raw = float(target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
     
         # -------------------------------------------------------
-    # TRUST GATE FOR GRU (Option C)
-    # -------------------------------------------------------
+    # TRUST GATE FOR GRU (REVISED: never freeze to current)
     current_price = float(merged["close"].iloc[-1])
-    gru_deviation_pct = abs((gru_pred_raw - current_price) / current_price * 100)
-    
-    # If GRU is off by more than 4%, do not trust the GRU or delta
-    if gru_deviation_pct > 4:
-        print(f"[WARN] GRU deviation too high ({gru_deviation_pct:.2f}%) — ignoring hybrid model")
-        hybrid_pred = current_price
-        move_pct = 0.0
-        return current_price, gru_pred_raw, hybrid_pred, move_pct
+    gru_deviation_pct = abs((gru_pred_raw - current_price) / current_price)
+
+    if gru_deviation_pct > 0.04:  # 4%
+    print(f"[WARN] GRU deviation too high ({gru_deviation_pct*100:.2f}%) — applying realism clamp instead of freezing")
+
+    # build a small realistic move using volatility
+    vol = float(merged["rolling_volatility"].iloc[-1])
+    if np.isnan(vol) or vol <= 0:
+        vol = current_price * 0.002  # 0.2% fallback
+
+    raw_vol_pct = vol / current_price
+    max_move_pct = float(np.clip(raw_vol_pct * 1.5, 0.0025, 0.02))  # 0.25%..2%
+
+    direction = 1.0 if gru_pred_raw >= current_price else -1.0
+    clamped_move_pct = direction * max_move_pct
+
+    hybrid_pred = current_price * (1 + clamped_move_pct)
+    move_pct = clamped_move_pct * 100
+
+    return current_price, gru_pred_raw, hybrid_pred, move_pct
 
     # -------------------------------------------------------
     # 7) Load XGBoost delta-correction model
@@ -301,27 +312,9 @@ def run_prediction_pipeline():
     # XGB delta expects EXACTLY 40 scaled features
     last_scaled = X_live_scaled[-1]
     live_tabular = pd.DataFrame([last_scaled], columns=required_cols)
+    live_tabular["gru_pred_raw"] = gru_pred_raw
 
-    # -------------------------------------------------------
-    # GRU INFERENCE (DEFINE gru_pred_raw)
-    # -------------------------------------------------------
-    gru_model = load_model(GRU_MODEL_PATH)
-    
-    # GRU expects (1, LOOKBACK, n_features)
-    X_live_gru = live_features.values.reshape(
-        1,
-        LOOKBACK,
-        live_features.shape[1]
-    )
-    
-    # Predict scaled close
-    gru_pred_scaled = float(gru_model.predict(X_live_gru, verbose=0)[0][0])
-    
-    # Convert back to raw USD price
-    target_scaler = joblib.load(TARGET_SCALER_PATH)
-    gru_pred_raw = float(
-        target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
-    
+   
     
     print(f"[DEBUG] GRU raw prediction: {gru_pred_raw:.2f}")
     
@@ -374,10 +367,7 @@ def run_prediction_pipeline():
 
 
 
-
-    current_price = float(merged["close"].iloc[-1])
-    move_pct = (hybrid_pred - current_price) / current_price * 100
-
+    
     print(
     f"[DEBUG] Current={current_price:.2f}, "
     f"GRU={gru_pred_raw:.2f}, "
@@ -390,9 +380,9 @@ def run_prediction_pipeline():
      #   hybrid_pred = gru_pred_raw
     #    move_pct = (hybrid_pred - current_price) / current_price * 100
 
-   # return current_price, gru_pred_raw, hybrid_pred, move_pct
+    return current_price, gru_pred_raw, hybrid_pred, move_pct
 
-# ============================================================
+# ===========================================================
 # 5. POST TO BLUESKY
 # ============================================================
 def post_to_bluesky(current_price, gru_pred, hybrid_pred, move_pct):
