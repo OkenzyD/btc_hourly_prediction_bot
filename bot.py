@@ -274,113 +274,67 @@ def run_prediction_pipeline():
     target_scaler = joblib.load(TARGET_SCALER_PATH)
     gru_pred_raw = float(target_scaler.inverse_transform([[gru_pred_scaled]])[0][0])
     
-        # -------------------------------------------------------
-    # TRUST GATE FOR GRU (REVISED: never freeze to current)
+     # -------------------------------------------------------
+    # TRUST GATE FOR GRU (warn only, no freezing)
+    # -------------------------------------------------------
     current_price = float(merged["close"].iloc[-1])
     gru_deviation_pct = abs((gru_pred_raw - current_price) / current_price)
-
-    if gru_deviation_pct > 0.04:  # 4%
-        print(f"[WARN] GRU deviation too high ({gru_deviation_pct*100:.2f}%) — applying realism clamp instead of freezing")
-
-    # build a small realistic move using volatility
-        vol = float(merged["rolling_volatility"].iloc[-1])
-    if np.isnan(vol) or vol <= 0:
-        vol = current_price * 0.002  # 0.2% fallback
-
-    raw_vol_pct = vol / current_price
-    max_move_pct = float(np.clip(max_move_pct, 0.005, 0.03))  # 0.25%..2%
-
-    direction = 1.0 if gru_pred_raw >= current_price else -1.0
-    clamped_move_pct = direction * max_move_pct
-
-    hybrid_pred = current_price * (1 + clamped_move_pct)
-    move_pct = clamped_move_pct * 100
-
     
-
+    if gru_deviation_pct > 0.04:
+        print(f"[WARN] GRU deviation high ({gru_deviation_pct*100:.2f}%)")
+    
     # -------------------------------------------------------
-    # 7) Load XGBoost delta-correction model
+    # 7) Load XGBoost %-error model
     # -------------------------------------------------------
     xgb_model = xgb.XGBRegressor()
     xgb_model.load_model(XGB_MODEL_PATH)
-
+    
     # -------------------------------------------------------
-    # 8) Build XGB input exactly like in delta training
-    #    - base features (scaled)
-    #    - plus raw GRU prediction
+    # 8) Build XGB input (EXACTLY 40 scaled features)
     # -------------------------------------------------------
-    # XGB delta expects EXACTLY 40 scaled features
     last_scaled = X_live_scaled[-1]
     live_tabular = pd.DataFrame([last_scaled], columns=required_cols)
-    live_tabular["gru_pred_raw"] = gru_pred_raw
-
-   
     
-    print(f"[DEBUG] GRU raw prediction: {gru_pred_raw:.2f}")
-    
-    print("\n===== %-ERROR HYBRID INPUT (DEBUG) =====")
-    print(live_tabular)
-    print("=======================================\n")
-
-    
-  
-
-     # -------------------------------------------------------
-    # %-ERROR XGBOOST PREDICTION
+    # -------------------------------------------------------
+    # 9) %-ERROR XGBOOST PREDICTION
     # -------------------------------------------------------
     pct_error_pred = float(xgb_model.predict(live_tabular)[0])
-    
-    # Safety clamp (percentage space, NOT price space)
     pct_error_pred = np.clip(pct_error_pred, -0.05, 0.05)  # ±5%
     
-    # Final hybrid price (multiplicative correction)
     hybrid_pred = gru_pred_raw * (1 + pct_error_pred)
-
-
-      # -------------------------------
-    # REALISM GUARDRAIL 
-    # -------------------------------
-    current_price = float(merged["close"].iloc[-1])
     
-    # Use your already-engineered volatility
+    # -------------------------------------------------------
+    # 10) REALISM GUARDRAIL (ONLY ONCE)
+    # -------------------------------------------------------
     vol = float(merged["rolling_volatility"].iloc[-1])
     if np.isnan(vol) or vol <= 0:
-        vol = current_price * 0.002  # fallback vol = 0.2%
+        vol = current_price * 0.002  # 0.2% fallback
     
-    # Convert vol to a move band
-    raw_vol_pct = vol / current_price            # e.g. 0.003 = 0.3%
-    max_move_pct = raw_vol_pct * 1.5             # K=1.5 (tweakable)
-    max_move_pct = float(np.clip(max_move_pct, 0.0025, 0.02))  # 0.25% .. 2.0%
+    raw_vol_pct = vol / current_price
+    max_move_pct = float(np.clip(raw_vol_pct * 1.5, 0.0025, 0.02))
     
-    # Clamp your model output to realistic hourly move
     raw_move_pct = (hybrid_pred - current_price) / current_price
     clamped_move_pct = float(np.clip(raw_move_pct, -max_move_pct, max_move_pct))
-    hybrid_pred = current_price * (1 + clamped_move_pct)
     
-    # recompute move_pct after clamping
+    hybrid_pred = current_price * (1 + clamped_move_pct)
     move_pct = clamped_move_pct * 100
-
-    # -------------------------------------------------------
-    # 11) Safety / sanity check
-    # -------------------------------------------------------
-
-
-
-
     
     print(
-    f"[DEBUG] Current={current_price:.2f}, "
-    f"GRU={gru_pred_raw:.2f}, "
-    f"PctError={pct_error_pred:.4f}, "
-    f"Hybrid={hybrid_pred:.2f}, "
-    f"Move={move_pct:.2f}%"
+        f"[DEBUG] Current={current_price:.2f}, "
+        f"GRU={gru_pred_raw:.2f}, "
+        f"PctError={pct_error_pred:.4f}, "
+        f"Hybrid={hybrid_pred:.2f}, "
+        f"Move={move_pct:.2f}%"
     )
-   # if hybrid_pred <= 0 or abs(move_pct) > 30:
-    #    print("[WARN] Unstable hybrid result — fallback to GRU only.")
-     #   hybrid_pred = gru_pred_raw
-    #    move_pct = (hybrid_pred - current_price) / current_price * 100
-
+    
     return current_price, gru_pred_raw, hybrid_pred, move_pct
+
+   
+
+
+
+    
+ 
 
 # ===========================================================
 # 5. POST TO BLUESKY
